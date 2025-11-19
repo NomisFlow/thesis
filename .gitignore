@@ -9,3 +9,4 @@ exp/
 pastebin.sh
 .venv
 debug/
+.DS_Store
