@@ -11,3 +11,4 @@ pastebin.sh
 debug/
 .gemini/
 gha-creds-*.json
+.DS_Store
