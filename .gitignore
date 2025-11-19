@@ -1,14 +1,9 @@
-GEMINI.md
 papers/
 pdf/
 data/
-ISSUES.md
-BRAINSTORMING.md
 tmd-release/exp/
 exp/
 pastebin.sh
 .venv
 debug/
-.gemini/
-gha-creds-*.json
 .DS_Store
