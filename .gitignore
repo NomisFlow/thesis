@@ -9,3 +9,5 @@ exp/
 pastebin.sh
 .venv
 debug/
+.gemini/
+gha-creds-*.json
