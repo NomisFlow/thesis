@@ -140,6 +140,55 @@ class RunningMeanStd(flax.struct.PyTreeNode):
         return self.replace(mean=new_mean, var=new_var, count=total_count)
 
 
+class SequenceEncoder(nn.Module):
+    """Sequence encoder using GRUCell and scan."""
+
+    hidden_dims: Sequence[int]
+    output_dim: int
+    kernel_init: Any = default_init()
+
+    @nn.compact
+    def __call__(self, x):
+        # x is (batch, seq_len, features)
+
+        # 1. Define the scan over the GRUCell module.
+        # This creates a new Module that will apply the GRUCell over the sequence axis.
+        GRU = nn.scan(
+            nn.GRUCell,
+            variable_broadcast='params',
+            split_rngs={'params': False, 'carry_init': True},
+            in_axes=1,  # Scan over the sequence axis (axis=1)
+            out_axes=1,
+        )
+
+        # 2. Instantiate the GRU module with its features.
+        gru = GRU(
+            features=self.hidden_dims[-1],
+            kernel_init=self.kernel_init,
+            recurrent_kernel_init=self.kernel_init,
+            name="GRU"
+        )
+
+        # 3. Initialize the carry (hidden state).
+        # We use a new RNG stream for carry initialization to avoid conflicts with 'params' RNGs.
+        carry_init_rng = self.make_rng('carry_init')
+        carry = gru.initialize_carry(carry_init_rng, (x.shape[0], self.hidden_dims[-1]))
+
+        # 4. Call the scanned module.
+        # The first return value is the final carry (hidden state).
+        # The second is the sequence of outputs from each step.
+        final_carry, _ = gru(carry, x)
+
+        # 5. Apply an MLP to the final hidden state.
+        context_vector = MLP(
+            hidden_dims=[self.output_dim],
+            activate_final=False,
+            kernel_init=self.kernel_init
+        )(final_carry)
+
+        return context_vector
+
+
 class GCActor(nn.Module):
     """Goal-conditioned actor.
 

@@ -57,6 +57,10 @@ def main(_):
     config = FLAGS.agent
     env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
 
+    # If the environment is image-based and the encoder is not specified, set a default.
+    if len(env.observation_space.shape) > 1 and config['encoder'] is None:
+        config.encoder = 'impala_small'
+
     dataset_class = {
         'GCDataset': GCDataset,
         'HGCDataset': HGCDataset,

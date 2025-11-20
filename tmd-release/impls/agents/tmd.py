@@ -13,6 +13,7 @@ from utils.networks import (
     GCActor,
     GCDiscreteActor,
     Param,
+    SequenceEncoder,
     StateRepresentation,
 )
 
@@ -192,6 +193,67 @@ class TMDAgent(flax.struct.PyTreeNode):
         }
 
     @jax.jit
+    def aux_loss(self, batch, grad_params, rng):
+        batch_size = batch['actions'].shape[0] # Get batch_size from a flat array
+
+        # Flatten the sequence and batch dimensions
+        obs_seq = batch['observations_seq']
+        flat_obs_seq = jax.tree_util.tree_map(
+            lambda x: x.reshape((batch_size * self.config['sequence_length'], *x.shape[2:])),
+            obs_seq
+        )
+
+        # Encode the flattened sequence
+        flat_psi_seq = self.network.select('psi')(flat_obs_seq, params=grad_params)
+        
+        # Reshape back to (ensemble, batch, sequence, features)
+        ensemble_size = flat_psi_seq.shape[0]
+        latent_dim = flat_psi_seq.shape[-1]
+        psi_seq = flat_psi_seq.reshape((ensemble_size, batch_size, self.config['sequence_length'], latent_dim))
+
+        # Get an RNG for the sequence encoder's carry initialization.
+        rng, sequence_encoder_rng = jax.random.split(rng) # 'rng' is from total_loss method
+
+        # Vmap the sequence encoder over the ensemble dimension
+        sequence_encoder_vmapped = jax.vmap(
+            lambda seq: self.network.select('sequence_encoder')(seq, params=grad_params, rngs={'carry_init': sequence_encoder_rng})
+        )
+        context_vector = sequence_encoder_vmapped(psi_seq)
+        
+        # Target latent state psi(s_{i+k})
+        psi_target = self.network.select('psi')(batch['trajectory_goals'], params=grad_params)
+
+        # Ensure context_vector and psi_target have compatible shapes for contrastive loss
+        # Typically, contrastive loss expects (num_ensembles, batch_size, embedding_dim)
+        # If there's no ensemble in psi_target, add a dimension.
+        if len(context_vector.shape) == 1:
+            context_vector = context_vector[None, ...]
+        if len(psi_target.shape) == 1:
+            psi_target = psi_target[None, ...]
+
+        # Compute contrastive loss
+        # Use a similar approach to the critic_loss for contrastive objective
+        dist = self.distance(context_vector[:, :, None], psi_target[:, None, :])
+        logits = -dist / jnp.sqrt(context_vector.shape[-1])
+
+        I = jnp.eye(batch_size)
+        contrastive_loss = jax.vmap(
+            lambda _logits: optax.softmax_cross_entropy(logits=_logits.T, labels=I),
+        )(logits)
+        aux_loss = jnp.mean(contrastive_loss)
+        
+        # Logging information
+        logits = jnp.mean(logits, axis=0)
+        logits_pos = jnp.sum(logits * I) / jnp.sum(I)
+        logits_neg = jnp.sum(logits * (1 - I)) / jnp.sum(1 - I)
+
+        return aux_loss, {
+            'aux_contrastive_loss': aux_loss,
+            'aux_logits_pos': logits_pos,
+            'aux_logits_neg': logits_neg,
+        }
+
+    @jax.jit
     def total_loss(self, batch, grad_params, rng=None, contrastive_only=False):
         info = {}
         rng = rng if rng is not None else self.rng
@@ -206,8 +268,13 @@ class TMDAgent(flax.struct.PyTreeNode):
         actor_loss, actor_info = self.actor_loss(batch, grad_params, actor_rng)
         for k, v in actor_info.items():
             info[f'actor/{k}'] = v
+        
+        # Pass rng to aux_loss
+        aux_loss, aux_info = self.aux_loss(batch, grad_params, rng)
+        for k, v in aux_info.items():
+            info[f'aux/{k}'] = v
 
-        loss = critic_loss + actor_loss
+        loss = critic_loss + actor_loss + self.config['beta'] * aux_loss
         return loss, info
 
     @jax.jit
@@ -251,7 +318,7 @@ class TMDAgent(flax.struct.PyTreeNode):
         config,
     ):
         rng = jax.random.PRNGKey(seed)
-        rng, init_rng = jax.random.split(rng, 2)
+        rng, init_rng, carry_init_rng = jax.random.split(rng, 3)
 
         ex_goals = ex_observations
         if config['discrete']:
@@ -334,12 +401,20 @@ class TMDAgent(flax.struct.PyTreeNode):
                     phi=(phi_def, (ex_observations, ex_actions)),
                     psi=(psi_def, (ex_goals,)),
                 )
+        sequence_encoder_def = SequenceEncoder(
+            hidden_dims=config['sequence_encoder_hidden_dims'],
+            output_dim=config['latent_dim'],
+        )
+
         networks = {k: v[0] for k, v in network_info.items()}
+        networks['sequence_encoder'] = sequence_encoder_def
         network_args = {k: v[1] for k, v in network_info.items()}
+        # Placeholder for sequence input (batch_size, sequence_length, latent_dim)
+        network_args['sequence_encoder'] = (jnp.zeros((1, 1, config['latent_dim'])),)
 
         network_def = ModuleDict(networks)
         network_tx = optax.adam(learning_rate=config['lr'])
-        network_params = network_def.init(init_rng, **network_args)['params']
+        network_params = network_def.init({'params': init_rng, 'carry_init': carry_init_rng}, **network_args)['params']
         network = TrainState.create(network_def, network_params, tx=network_tx)
 
         return cls(rng, network=network, config=flax.core.FrozenDict(**config))
@@ -356,10 +431,12 @@ def get_config():
             actor_hidden_dims=(512, 512, 512),  # Actor network hidden dimensions.
             value_hidden_dims=(512, 512, 512),  # Value network hidden dimensions.
             latent_dim=512,  # Latent dimension for phi and psi.
+            sequence_encoder_hidden_dims=(256,),  # Hidden dimensions for the sequence encoder.
             layer_norm=True,  # Whether to use layer normalization.
             discount=0.99,  # Discount factor.
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
             zeta=0.05,  # Weight for TMD backup and invariance losses.
+            beta=0.1,  # Weight for the auxiliary loss.
             t=3.0,  # Clipping threshold for the backup LINEX loss.
             diag_backup=0.5,  # Weighting of backups on diagonal (i.e., for s,g ~ p(s,g)) vs. off-diagonal (i.e., for s,g ~ p(s)p(g)).
             stopgrad_psi_backup=False,  # Whether to stop gradient for psi in the backup loss.
@@ -374,6 +451,7 @@ def get_config():
             value_p_trajgoal=1.0,  # Probability of using a future state in the same trajectory as the value goal.
             value_p_randomgoal=0.0,  # Probability of using a random state as the value goal.
             value_geom_sample=True,  # Whether to use geometric sampling for future value goals.
+            sequence_length=5,  # Length of the observation sequence for auxiliary loss.
             actor_p_curgoal=0.0,  # Probability of using the current state as the actor goal.
             actor_p_trajgoal=1.0,  # Probability of using a future state in the same trajectory as the actor goal.
             actor_p_randomgoal=0.0,  # Probability of using a random state as the actor goal.

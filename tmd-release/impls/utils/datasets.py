@@ -239,6 +239,31 @@ class GCDataset:
 
         batch['value_goals'] = self.get_observations(value_goal_idxs)
         batch['actor_goals'] = self.get_observations(actor_goal_idxs)
+
+        # For auxiliary loss: sequence of observations and its corresponding goal
+        trajectory_start_idxs = idxs
+        sequence_length = self.config['sequence_length']
+
+        # Get the final state index for each trajectory in the batch
+        # np.searchsorted finds insertion points for maintaining order
+        # We find the terminal location that is just after or equal to the current index
+        final_state_of_traj_idxs = self.terminal_locs[np.searchsorted(self.terminal_locs, trajectory_start_idxs)]
+        
+        # Build the sequence of observations
+        observations_seq_list = []
+        for i in range(sequence_length):
+            # Ensure the index for current_obs_idxs doesn't exceed the trajectory boundary
+            current_obs_idxs = np.minimum(trajectory_start_idxs + i, final_state_of_traj_idxs)
+            observations_seq_list.append(self.get_observations(current_obs_idxs))
+
+        # Stack the observations along a new axis to form the sequence
+        # The shape will be (batch_size, sequence_length, *obs_shape)
+        batch['observations_seq'] = jax.tree_util.tree_map(lambda *args: np.stack(args, axis=1), *observations_seq_list)
+
+        # Get the trajectory goal (s_{i+k})
+        trajectory_goals_idxs = np.minimum(trajectory_start_idxs + sequence_length, final_state_of_traj_idxs)
+        batch['trajectory_goals'] = self.get_observations(trajectory_goals_idxs)
+
         successes = (idxs == value_goal_idxs).astype(float)
         batch['masks'] = 1.0 - successes
         batch['rewards'] = successes - (1.0 if self.config['gc_negative'] else 0.0)
