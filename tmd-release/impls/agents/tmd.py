@@ -194,7 +194,7 @@ class TMDAgent(flax.struct.PyTreeNode):
 
     @jax.jit
     def aux_loss(self, batch, grad_params, rng):
-        batch_size = batch['actions'].shape[0] # Get batch_size from a flat array
+        batch_size = batch['actions'].shape[0]  # Retrieves the batch size from the first dimension of the actions array
 
         # Flatten the sequence and batch dimensions
         obs_seq = batch['observations_seq']
@@ -225,10 +225,13 @@ class TMDAgent(flax.struct.PyTreeNode):
 
         # Ensure context_vector and psi_target have compatible shapes for contrastive loss
         # Typically, contrastive loss expects (num_ensembles, batch_size, embedding_dim)
-        # If there's no ensemble in psi_target, add a dimension.
-        if len(context_vector.shape) == 1:
+        # If there's no ensemble (i.e. shape is (batch_size, latent_dim)), add a dimension.
+        # Expected shapes:
+        # context_vector: (ensemble_size, batch_size, latent_dim) or (batch_size, latent_dim)
+        # psi_target: (ensemble_size, batch_size, latent_dim) or (batch_size, latent_dim)
+        if len(context_vector.shape) == 2:
             context_vector = context_vector[None, ...]
-        if len(psi_target.shape) == 1:
+        if len(psi_target.shape) == 2:
             psi_target = psi_target[None, ...]
 
         # Compute contrastive loss
