@@ -194,7 +194,7 @@ class TMDAgent(flax.struct.PyTreeNode):
 
     @jax.jit
     def aux_loss(self, batch, grad_params, rng):
-        batch_size = batch['actions'].shape[0] # Get batch_size from a flat array
+        batch_size = batch['actions'].shape[0]  # Retrieves batch size
 
         # Flatten the sequence and batch dimensions
         obs_seq = batch['observations_seq']
@@ -225,10 +225,13 @@ class TMDAgent(flax.struct.PyTreeNode):
 
         # Ensure context_vector and psi_target have compatible shapes for contrastive loss
         # Typically, contrastive loss expects (num_ensembles, batch_size, embedding_dim)
-        # If there's no ensemble in psi_target, add a dimension.
-        if len(context_vector.shape) == 1:
+        # If there's no ensemble (i.e. shape is (batch_size, latent_dim)), add a dimension.
+        # Expected shapes:
+        # context_vector: (ensemble_size, batch_size, latent_dim) or (batch_size, latent_dim)
+        # psi_target: (ensemble_size, batch_size, latent_dim) or (batch_size, latent_dim)
+        if len(context_vector.shape) == 2:
             context_vector = context_vector[None, ...]
-        if len(psi_target.shape) == 1:
+        if len(psi_target.shape) == 2:
             psi_target = psi_target[None, ...]
 
         # Compute contrastive loss
@@ -402,7 +405,7 @@ class TMDAgent(flax.struct.PyTreeNode):
                     psi=(psi_def, (ex_goals,)),
                 )
         sequence_encoder_def = SequenceEncoder(
-            hidden_dims=config['sequence_encoder_hidden_dims'],
+            hidden_dims=config['sequence_encoder_hidden_dims'][0],
             output_dim=config['latent_dim'],
         )
 
@@ -414,7 +417,14 @@ class TMDAgent(flax.struct.PyTreeNode):
 
         network_def = ModuleDict(networks)
         network_tx = optax.adam(learning_rate=config['lr'])
-        network_params = network_def.init({'params': init_rng, 'carry_init': carry_init_rng}, **network_args)['params']
+        
+        # Force initialization on CPU to avoid QR decomposition issues on Metal
+        with jax.default_device(jax.devices('cpu')[0]):
+            network_params = network_def.init({'params': init_rng, 'carry_init': carry_init_rng}, **network_args)['params']
+        
+        # Move params back to default device
+        network_params = jax.device_put(network_params)
+        
         network = TrainState.create(network_def, network_params, tx=network_tx)
 
         return cls(rng, network=network, config=flax.core.FrozenDict(**config))

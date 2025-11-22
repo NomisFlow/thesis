@@ -141,52 +141,33 @@ class RunningMeanStd(flax.struct.PyTreeNode):
 
 
 class SequenceEncoder(nn.Module):
-    """Sequence encoder using GRUCell and scan."""
+    """A simple GRU-based sequence encoder using nn.scan with parameter sharing."""
 
-    hidden_dims: Sequence[int]
+    hidden_dims: int
     output_dim: int
-    kernel_init: Any = default_init()
 
     @nn.compact
-    def __call__(self, x):
-        # x is (batch, seq_len, features)
-
-        # 1. Define the scan over the GRUCell module.
-        # This creates a new Module that will apply the GRUCell over the sequence axis.
-        GRU = nn.scan(
+    def __call__(self, sequence):
+        # sequence shape: (batch_size, sequence_length, feature_dim)
+        ScanGRU = nn.scan(
             nn.GRUCell,
             variable_broadcast='params',
-            split_rngs={'params': False, 'carry_init': True},
-            in_axes=1,  # Scan over the sequence axis (axis=1)
+            split_rngs={'params': False},
+            in_axes=1,
             out_axes=1,
         )
 
-        # 2. Instantiate the GRU module with its features.
-        gru = GRU(
-            features=self.hidden_dims[-1],
-            kernel_init=self.kernel_init,
-            recurrent_kernel_init=self.kernel_init,
-            name="GRU"
-        )
+        scan_gru = ScanGRU(features=self.hidden_dims)
 
-        # 3. Initialize the carry (hidden state).
-        # We use a new RNG stream for carry initialization to avoid conflicts with 'params' RNGs.
-        carry_init_rng = self.make_rng('carry_init')
-        carry = gru.initialize_carry(carry_init_rng, (x.shape[0], self.hidden_dims[-1]))
+        # Initialize carry
+        carry_rng = self.make_rng('carry_init')
+        input_shape = sequence[:, 0].shape
+        carry = scan_gru.initialize_carry(carry_rng, input_shape)
 
-        # 4. Call the scanned module.
-        # The first return value is the final carry (hidden state).
-        # The second is the sequence of outputs from each step.
-        final_carry, _ = gru(carry, x)
+        final_carry, _ = scan_gru(carry, sequence)
 
-        # 5. Apply an MLP to the final hidden state.
-        context_vector = MLP(
-            hidden_dims=[self.output_dim],
-            activate_final=False,
-            kernel_init=self.kernel_init
-        )(final_carry)
-
-        return context_vector
+        # Project to output dimension
+        return nn.Dense(self.output_dim)(final_carry)
 
 
 class GCActor(nn.Module):
