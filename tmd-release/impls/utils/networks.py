@@ -141,7 +141,7 @@ class RunningMeanStd(flax.struct.PyTreeNode):
 
 
 class SequenceEncoder(nn.Module):
-    """A simple GRU-based sequence encoder."""
+    """A simple GRU-based sequence encoder using nn.scan with parameter sharing."""
 
     hidden_dims: int
     output_dim: int
@@ -149,26 +149,23 @@ class SequenceEncoder(nn.Module):
     @nn.compact
     def __call__(self, sequence):
         # sequence shape: (batch_size, sequence_length, feature_dim)
-        gru_cell = nn.GRUCell(features=self.hidden_dims)
-        
+        ScanGRU = nn.scan(
+            nn.GRUCell,
+            variable_broadcast='params',
+            split_rngs={'params': False},
+            in_axes=1,
+            out_axes=1,
+        )
+
+        scan_gru = ScanGRU(features=self.hidden_dims)
+
         # Initialize carry
         carry_rng = self.make_rng('carry_init')
-        carry = gru_cell.initialize_carry(carry_rng, (sequence.shape[0],))
+        input_shape = sequence[:, 0].shape
+        carry = scan_gru.initialize_carry(carry_rng, input_shape)
 
-        # Before scan, transpose sequence from (batch_size, sequence_length, feature_dim)
-        # to (sequence_length, batch_size, feature_dim)
-        sequence = jnp.swapaxes(sequence, 0, 1)
+        final_carry, _ = scan_gru(carry, sequence)
 
-        def body_fn(carry, x):
-            carry, _ = gru_cell(carry, x)
-            return carry, carry
-        
-        final_carry, _ = nn.scan(
-            body_fn,
-            variable_broadcast='params',
-            split_rngs={'params': False}
-        )(carry, sequence)
-        
         # Project to output dimension
         return nn.Dense(self.output_dim)(final_carry)
 
