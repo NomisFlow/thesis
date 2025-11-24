@@ -120,7 +120,7 @@ Given the high risk of representation mismatch between the history-based state e
     *   **Benefit:** This is a standard technique from self-supervised learning that can improve stability. It gives the main encoders more freedom to learn rich features while the projection heads specialize in transforming them into a space where the distance metric is calculated.
 
 *   **4. Coordinated Data Augmentation:**
-    *   **Concept:** Apply the *exact same* random data augmentation (e.g., random crop, color jitter) to all images in the history sequence `(s_{t-H}, ..., s_t)` *and* to the goal image `g` within the same training sample.
+    *   **Concept:** Apply the *exact same* random data augmentation (e.g., random crop, color jitter) to all images in the history sequence `(s_{t-H}, ..., s_t)` *and` to the goal image `g` within the same training sample.
     *   **Benefit:** Encourages the encoders to learn features that are invariant to the same set of visual transformations, naturally leading to better alignment.
 
 *   **Recommended Implementation Strategy:**
@@ -149,3 +149,108 @@ While the HC-TMD proposal specifies a Transformer, it is worth considering alter
 *   **Recommendation for Initial Implementation:**
     *   **Start with an LSTM or GRU.** This is the most pragmatic and lowest-risk starting point. It directly addresses the critical "Inference Latency" problem of the Transformer-based design. The potential limitations in modeling very long-range dependencies are an acceptable trade-off for a first implementation.
     *   **Path Forward:** If the LSTM-based model proves to be limited by its ability to capture temporal patterns, it can then be "upgraded" to a more powerful (and expensive) Transformer architecture. This creates a clear, iterative development path.
+
+---
+
+### Session: 2025-11-22
+
+**Topic:** Boosting / Ensemble Trajectory Stitching
+
+**Proposal:** Use an ensemble of "weak learners" (short-horizon predictors or policies) to generate multiple potential future trajectories, then aggregate and stitch them to form a robust long-horizon plan. This draws inspiration from AdaBoost (combining weak learners) and existing Model-Based RL approaches (like PETS).
+
+#### 1. Concept Translation to TMD/Offline RL
+
+*   **"Weak Learner" $ightarrow$ Short-Horizon Dynamics Model:** Instead of a single policy attempting to solve the entire task, we use "weak learners" to predict the *outcome* of actions (dynamics: $s_t, a_t ightarrow s_{t+n}$) rather than the distance.
+*   **"Redoing Experiment" $ightarrow$ Ensemble Generation:** Run this dynamics prediction multiple times (or use an ensemble of models) to generate a *distribution* of possible near-future states. This averages out the noise in the transition dynamics.
+*   **"Averaging Out" $ightarrow$ Robust Trajectory Segments:** Aggregate these predictions to form a "canonical," high-confidence trajectory segment. This gives us a reliable piece of movement we can trust.
+*   **"Stitching" $ightarrow$ TMD-Guided Optimization:** Use the **Base TMD** (which predicts *steps/distance*) as the Critic.
+    *   The Ensemble *proposes* where we can go (Generation).
+    *   The Base TMD *judges* if that destination is closer to the goal (Evaluation).
+    *   We stitch the segments that the TMD Critic deems most valuable.
+
+#### 2. Implementation Pathways
+
+*   **Path A: Inference-Time Planning (Recommended):**
+    *   Use the trained TMD model as a critic/heuristic.
+    *   At each step, roll out $K$ short trajectories using a base policy or random shooting.
+    *   Score each trajectory using the TMD distance to the goal.
+    *   Execute the first action of the best trajectory (or an average of the top $k$).
+    *   This effectively "stitches" the best short-term moves to solve the long-term task.
+
+*   **Path B: Data Augmentation (Offline):**
+    *   Use the ensemble approach to generate synthetic "stitched" trajectories from the offline dataset *before* training the final policy.
+    *   Add these optimized trajectories to the replay buffer to help the actor learn better behaviors.
+
+#### 3. Relevance to Current Issues
+
+This approach is orthogonal to the "Contrastive Loss Failure" but highly relevant to the overall goal of robust navigation. If the contrastive loss is fixed (via KAN-6), the TMD metric becomes reliable. This "Boosting/Ensemble" idea is then the perfect mechanism to *exploit* that reliable metric for superior performance.
+
+---
+
+### Session: 2025-11-22
+
+**Topic:** Action Stacking for Improved Dynamics Modeling
+
+**Proposal:** Explicitly incorporate prior actions into the current action decision-making process to model inertia and momentum, leading to smoother, more physically compliant, and predictable robot behavior. This will help both dynamics prediction and representation learning.
+
+#### 1. Why it Works
+
+*   **Physics Compliance:** Robots have mass and cannot change actions instantaneously. Conditioning on $a_{t-1}$ ensures actions are physically plausible.
+*   **Smoother Control:** Reduces jerky "bang-bang" control, making actions and resulting state transitions more predictable for the TMD critic.
+*   **Implicit State Information:** Previous actions provide context about the robot's current momentum/velocity, which might not be fully captured by a single static state observation ($s_t$).
+
+#### 2. Concrete Application: Action Stacking (Recommended)
+
+*   **Concept:** Augment the policy network's input to include the previous action(s). This allows the network to *learn* the optimal way to integrate past actions with the current state to produce a new action.
+*   **Implementation:**
+    *   **Current Policy Input:** `latent_state = ψ(s_t)`
+    *   **New Policy Input:** `[ψ(s_t), a_{t-1}]` (concatenating the latent state with the previous action).
+    *   The policy MLP would then receive this combined vector to output $a_t$.
+*   **Advantages:**
+    *   **Low Computational Cost:** Simple concatenation, minimal overhead.
+    *   **Learned Integration:** The network autonomously decides how much influence $a_{t-1}$ should have, adapting to different phases of movement (e.g., high influence during steady motion, low during sharp turns).
+    *   **Flexibility:** Can easily extend to include more past actions (e.g., `[ψ(s_t), a_{t-1}, a_{t-2}, ...]`) or their derivatives.
+
+#### 3. Considerations
+
+*   **Initial Action:** For the very first step ($t=0$), $a_{t-1}$ will be undefined. A common solution is to initialize it to zero or a learned parameter.
+*   **State Dependency:** It's crucial that the current action ($a_t$) still heavily depends on the current state ($s_t$) and the goal ($g$). Action stacking provides *additional context*, not a replacement for state information.
+
+This approach should make the learned policy outputs more stable and physically grounded, which can be beneficial for the dynamics models involved in the "Boosting/Ensemble" approach and the overall predictability for TMD.
+
+---
+
+### Session: 2025-11-24
+
+**Topic:** Interval Quasimetric Embeddings (IQE) for TMD
+
+**Proposal:** Replace or augment the current Metric Residual Network (MRN) distance with Interval Quasimetric Embeddings (IQE). This is based on the suggestion to use IQE as a more robust property-enforcing building block for quasimetric learning.
+
+**Reference:** "Improved Representation of Asymmetrical Distances with Interval Quasimetric Embeddings" (arXiv:2211.15120).
+
+#### 1. Analysis of Existing Implementation
+We identified that `tmd.py` already contains an `iqe_distance` method.
+*   **Status:** Present but disabled (`use_iqe=False` by default).
+*   **Logic:** Implements the "Deep Quasimetric" logic using `argsort` and `cumsum` to calculate the intersection of intervals in the latent space.
+*   **Reduction:** Uses a learned convex combination (`alpha`) of `mean` and `max` over components, which matches the "maxmean" reduction from the literature.
+
+#### 2. Detailed Implementation Plan (TDD-Driven) - Branch: `feat/KAN-14-iqe-distance`
+
+**Phase 1: Verification & Testing**
+*   **Create Test Suite:** Create `tmd-release/tests/test_iqe.py`.
+*   **Test Case 1: Basic Properties:**
+    *   `d(x, x) == 0`
+    *   `d(x, y) >= 0`
+    *   `d(x, y)` != `d(y, x)` (Asymmetry check).
+    *   Triangle Inequality check: `d(x, z) <= d(x, y) + d(y, z)` (Should hold approximately or exactly depending on formulation).
+*   **Test Case 2: Gradient Flow:** Ensure gradients can propagate through the `argsort` / `take_along_axis` operations (JAX handles this, but verification is needed).
+*   **Test Case 3: Numerical Stability:** Test with very small and very large values.
+
+**Phase 2: Integration & Experimentation**
+*   **Configuration:** Enable `use_iqe=True` in a config file or command line flag.
+*   **Hyperparameters:** The number of components (`components=8` default) might need tuning for IQE specifically.
+*   **Jira:** Tracked in `KAN-14`.
+
+#### 3. Caveats & Risks
+*   **Performance:** The `argsort` operation in JAX/XLA can be slower than simple matrix multiplications used in MRN. We need to monitor step time.
+*   **Latent Dimension:** IQE splits the latent dimension $D$ into $K$ components. $D$ must be divisible by $K$. The current default $D=512, K=8$ is fine ($64$ dims/component), but if we change $D$, we must be careful.

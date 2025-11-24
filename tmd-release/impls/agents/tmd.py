@@ -380,7 +380,7 @@ def get_config():
             actor_geom_sample=False,  # Whether to use geometric sampling for future actor goals.
             gc_negative=False,  # Unused (defined for compatibility with GCDataset).
             p_aug=0.0,  # Probability of applying image augmentation.
-            use_iqe=False,  # Whether to use IQE distance or MRN distance
+            use_iqe=True,  # Whether to use IQE distance or MRN distance
             use_latent=False,  # Whether to use latent for policy action sampling
             freeze_enc_for_actor_grad=False,  # Whether to stop grad for actor when using encoder
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
