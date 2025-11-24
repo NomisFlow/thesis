@@ -8,5 +8,5 @@
 | KAN-10   | #N/A     | [ ]    | Implement Uniform distribution sampling for k              | Gemini   |
 | KAN-11   | #N/A     | [ ]    | Tuning of ζ (zeta) for TMD Loss                            | Gemini   |
 | KAN-12   | #N/A     | [ ]    | Implement Asymmetric Architecture or Decorrelation Loss    | Gemini   |
-| KAN-14   | #4       | [ ]    | Verify and Enable IQE Distance Metric                      | Gemini   |
+| KAN-14   | #4       | [x]    | Verify and Enable IQE Distance Metric                      | Gemini   |
 | N/A      | #3       | [x]    | Implement Action Stacking for Policy Network               | Gemini   |
