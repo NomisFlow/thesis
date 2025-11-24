@@ -159,9 +159,19 @@ class TMDAgent(flax.struct.PyTreeNode):
                 psi_g = jnp.mean(psi_g, axis=0)
             if self.config['freeze_enc_for_actor_grad']:
                 psi_s, psi_g = jax.lax.stop_gradient(psi_s), jax.lax.stop_gradient(psi_g)
-            dist = self.network.select('actor')(psi_s, psi_g, params=grad_params)
+            dist = self.network.select('actor')(
+                psi_s,
+                psi_g,
+                prev_actions=batch.get('prev_actions'),
+                params=grad_params,
+            )
         else:
-            dist = self.network.select('actor')(batch['observations'], batch['actor_goals'], params=grad_params)
+            dist = self.network.select('actor')(
+                batch['observations'],
+                batch['actor_goals'],
+                prev_actions=batch.get('prev_actions'),
+                params=grad_params,
+            )
         if self.config['const_std']:
             q_actions = jnp.clip(dist.mode(), -1, 1)
         else:
@@ -226,6 +236,7 @@ class TMDAgent(flax.struct.PyTreeNode):
         self,
         observations,
         goals=None,
+        prev_actions=None,
         seed=None,
         temperature=1.0,
     ):
@@ -234,9 +245,13 @@ class TMDAgent(flax.struct.PyTreeNode):
             if len(psi_s.shape) == 2:  # in inference, we don't have batch dimension
                 psi_s = jnp.mean(psi_s, axis=0)
                 psi_g = jnp.mean(psi_g, axis=0)
-            dist = self.network.select('actor')(psi_s, psi_g, temperature=temperature)
+            dist = self.network.select('actor')(
+                psi_s, psi_g, prev_actions=prev_actions, temperature=temperature
+            )
         else:
-            dist = self.network.select('actor')(observations, goals, temperature=temperature)
+            dist = self.network.select('actor')(
+                observations, goals, prev_actions=prev_actions, temperature=temperature
+            )
         actions = dist.sample(seed=seed)
         if not self.config['discrete']:
             actions = jnp.clip(actions, -1, 1)
@@ -315,7 +330,7 @@ class TMDAgent(flax.struct.PyTreeNode):
             )
         if config['use_iqe']:
             network_info = dict(
-                actor=(actor_def, (ex_observations, ex_goals)),
+                actor=(actor_def, (ex_observations, ex_goals, ex_actions)),
                 phi=(phi_def, (ex_observations, ex_actions)),
                 psi=(psi_def, (ex_goals,)),
                 alpha_raw=(Param(), ()),
@@ -324,13 +339,13 @@ class TMDAgent(flax.struct.PyTreeNode):
             if config['use_latent']:
                 embed = jnp.zeros((1, config['latent_dim']))
                 network_info = dict(
-                    actor=(actor_def, (embed, embed)),
+                    actor=(actor_def, (embed, embed, ex_actions)),
                     phi=(phi_def, (ex_observations, ex_actions)),
                     psi=(psi_def, (ex_goals,)),
                 )
             else:
                 network_info = dict(
-                    actor=(actor_def, (ex_observations, ex_goals)),
+                    actor=(actor_def, (ex_observations, ex_goals, ex_actions)),
                     phi=(phi_def, (ex_observations, ex_actions)),
                     psi=(psi_def, (ex_goals,)),
                 )

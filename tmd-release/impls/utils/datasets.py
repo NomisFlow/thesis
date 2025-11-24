@@ -218,6 +218,14 @@ class GCDataset:
             idxs = self.dataset.get_random_idxs(batch_size)
 
         batch = self.dataset.sample(batch_size, idxs)
+        if 'actions' in self.dataset:
+            prev_idxs = idxs - 1
+            is_initial = np.isin(idxs, self.initial_locs)
+            safe_prev_idxs = np.maximum(prev_idxs, 0)
+            prev_actions = np.array(self.dataset['actions'][safe_prev_idxs])
+            prev_actions[is_initial] = 0.0
+            batch['prev_actions'] = prev_actions
+
         if self.config['frame_stack'] is not None:
             batch['observations'] = self.get_observations(idxs)
             batch['next_observations'] = self.get_observations(idxs + 1)
