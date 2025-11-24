@@ -330,7 +330,7 @@ class TMDAgent(flax.struct.PyTreeNode):
             )
         if config['use_iqe']:
             network_info = dict(
-                actor=(actor_def, (ex_observations, ex_goals)),
+                actor=(actor_def, (ex_observations, ex_goals, ex_actions)),
                 phi=(phi_def, (ex_observations, ex_actions)),
                 psi=(psi_def, (ex_goals,)),
                 alpha_raw=(Param(), ()),
