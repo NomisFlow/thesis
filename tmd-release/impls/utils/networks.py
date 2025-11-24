@@ -583,6 +583,10 @@ class StateRepresentation(nn.Module):
 
         phi = self.phi(phi_inputs)
 
+        if phi.ndim > 3:
+            spatial_axes = tuple(range(2, phi.ndim - 1))
+            phi = jnp.mean(phi, axis=spatial_axes)
+
         return phi
 
 
