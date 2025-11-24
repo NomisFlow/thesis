@@ -193,12 +193,27 @@ class GCActor(nn.Module):
         """
         if self.gc_encoder is not None:
             inputs = self.gc_encoder(observations, goals, goal_encoded=goal_encoded)
+            if prev_actions is not None:
+                inputs = jnp.concatenate([inputs, prev_actions], axis=-1)
         else:
             inputs = [observations]
             if goals is not None:
                 inputs.append(goals)
             if prev_actions is not None:
-                inputs.append(prev_actions)
+                # Broadcast prev_actions if observations are spatial (images)
+                if observations.ndim > 2 and prev_actions.ndim == 2:
+                    # obs: (B, H, W, C), prev_actions: (B, A)
+                    # We want to broadcast (B, A) to (B, H, W, A)
+                    # Expand dims: (B, 1, 1, A)
+                    prev_actions_b = prev_actions[:, None, None, :]
+                    # Tile to match H, W: (B, H, W, A)
+                    # We can rely on jnp.broadcast_to or tile.
+                    # Target shape: (B, H, W, A) where H=obs.shape[1], W=obs.shape[2]
+                    target_shape = observations.shape[:-1] + (prev_actions.shape[-1],)
+                    prev_actions_b = jnp.broadcast_to(prev_actions_b, target_shape)
+                    inputs.append(prev_actions_b)
+                else:
+                    inputs.append(prev_actions)
             inputs = jnp.concatenate(inputs, axis=-1)
         outputs = self.actor_net(inputs)
 

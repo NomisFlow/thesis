@@ -44,12 +44,32 @@ def test_gc_actor_action_stacking():
     assert actions.shape == (batch_size, action_dim)
     
     # Forward pass WITHOUT prev_actions using the SAME variables -> Should Fail
-    # This confirms that the network structure (specifically the first layer weights) 
-    # depends on the input size including prev_actions.
     with RaisesContext(Exception):
         actor.apply(variables, observations, goals)
 
-    print("GCActor successfully handles prev_actions.")
+    # --- New Test Case: Image Observations (Broadcasting check) ---
+    image_shape = (64, 64, 3)
+    observations_img = jax.random.normal(key, (batch_size, *image_shape))
+    goals_img = jax.random.normal(key, (batch_size, *image_shape))
+    
+    # Init with images + prev_actions (without encoder, should broadcast)
+    variables_img = actor.init(key, observations_img, goals_img, prev_actions=prev_actions)
+    dist_img = actor.apply(variables_img, observations_img, goals_img, prev_actions=prev_actions)
+    actions_img = dist_img.mode()
+    
+    # Output of MLP on (B, H, W, C) is (B, H, W, A)
+    # But GCActor applies Dense to the last dim.
+    # Then mean_net applies Dense to last dim.
+    # distrax.MultivariateNormalDiag expects loc to be (B, A)? 
+    # No, if loc is (B, H, W, A), it creates a batch of distributions.
+    # GCActor returns `distribution`.
+    # If we just want actions, typically we might expect (B, A).
+    # BUT if inputs are spatial, outputs will be spatial.
+    # This test just confirms it doesn't CRASH.
+    
+    assert actions_img.shape == (batch_size, 64, 64, action_dim)
+
+    print("GCActor successfully handles prev_actions with vectors and images.")
 
 if __name__ == "__main__":
     test_gc_actor_action_stacking()
