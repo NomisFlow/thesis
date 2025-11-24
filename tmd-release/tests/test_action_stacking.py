@@ -71,5 +71,40 @@ def test_gc_actor_action_stacking():
 
     print("GCActor successfully handles prev_actions with vectors and images.")
 
+def test_state_representation_broadcasting():
+    # Import StateRepresentation
+    from impls.utils.networks import StateRepresentation
+    
+    hidden_dims = [256, 256]
+    latent_dim = 32
+    batch_size = 4
+    
+    rep = StateRepresentation(
+        hidden_dims=hidden_dims,
+        latent_dim=latent_dim
+    )
+    
+    key = jax.random.PRNGKey(0)
+    image_shape = (64, 64, 3)
+    action_dim = 5
+    
+    observations = jax.random.normal(key, (batch_size, *image_shape))
+    actions = jax.random.normal(key, (batch_size, action_dim))
+    
+    # Init
+    variables = rep.init(key, observations, actions)
+    
+    # Apply
+    output = rep.apply(variables, observations, actions)
+    
+    # Output should be (Ensemble, B, H, W, latent) because MLP is ensemblized (default 2)
+    # and applied to last dim
+    expected_shape = (2, batch_size, 64, 64, latent_dim)
+    if output.shape != expected_shape:
+        print(f"Assertion Failed. Expected {expected_shape}, Got {output.shape}")
+    assert output.shape == expected_shape
+    print("StateRepresentation successfully handles broadcasting.")
+
 if __name__ == "__main__":
     test_gc_actor_action_stacking()
+    test_state_representation_broadcasting()

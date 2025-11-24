@@ -574,7 +574,12 @@ class StateRepresentation(nn.Module):
         if actions is None:
             phi_inputs = observations
         else:
-            phi_inputs = jnp.concatenate([observations, actions], axis=-1)
+            if observations.ndim > 2 and actions.ndim == 2:
+                target_shape = observations.shape[:-1] + (actions.shape[-1],)
+                actions_b = jnp.broadcast_to(actions[:, None, None, :], target_shape)
+                phi_inputs = jnp.concatenate([observations, actions_b], axis=-1)
+            else:
+                phi_inputs = jnp.concatenate([observations, actions], axis=-1)
 
         phi = self.phi(phi_inputs)
 
