@@ -178,6 +178,7 @@ class GCActor(nn.Module):
         self,
         observations,
         goals=None,
+        prev_actions=None,
         goal_encoded=False,
         temperature=1.0,
     ):
@@ -186,6 +187,7 @@ class GCActor(nn.Module):
         Args:
             observations: Observations.
             goals: Goals (optional).
+            prev_actions: Previous actions (optional).
             goal_encoded: Whether the goals are already encoded.
             temperature: Scaling factor for the standard deviation.
         """
@@ -195,6 +197,8 @@ class GCActor(nn.Module):
             inputs = [observations]
             if goals is not None:
                 inputs.append(goals)
+            if prev_actions is not None:
+                inputs.append(prev_actions)
             inputs = jnp.concatenate(inputs, axis=-1)
         outputs = self.actor_net(inputs)
 
