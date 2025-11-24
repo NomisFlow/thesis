@@ -2,6 +2,18 @@ import jax
 import jax.numpy as jnp
 from impls.utils.networks import GCActor
 
+class RaisesContext:
+    def __init__(self, expected_exception):
+        self.expected_exception = expected_exception
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type is None:
+            raise AssertionError(f"Expected {self.expected_exception}, but no exception was raised.")
+        return True # Suppress exception
+
 def test_gc_actor_action_stacking():
     # Define dimensions
     hidden_dims = [256, 256]
@@ -34,12 +46,8 @@ def test_gc_actor_action_stacking():
     # Forward pass WITHOUT prev_actions using the SAME variables -> Should Fail
     # This confirms that the network structure (specifically the first layer weights) 
     # depends on the input size including prev_actions.
-    try:
+    with RaisesContext(Exception):
         actor.apply(variables, observations, goals)
-        print("FAILURE: Network accepted input without prev_actions despite being initialized with them.")
-        exit(1)
-    except Exception as e: # Expecting size mismatch error from JAX/Flax
-        print("SUCCESS: Network correctly rejected input missing prev_actions.")
 
     print("GCActor successfully handles prev_actions.")
 

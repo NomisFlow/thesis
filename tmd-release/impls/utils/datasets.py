@@ -202,8 +202,22 @@ class GCDataset:
                 stacked_observations = self.get_stacked_observations(np.arange(self.size))
                 self.dataset = Dataset(self.dataset.copy(dict(observations=stacked_observations)))
 
-        batch = self.dataset.sample(batch_size, idxs)
+    def sample(self, batch_size, idxs=None, evaluation=False):
+        """Sample a batch of transitions with goals.
 
+        This method samples a batch of transitions with goals (value_goals and actor_goals) from the dataset. They are
+        stored in the keys 'value_goals' and 'actor_goals', respectively. It also computes the 'rewards' and 'masks'
+        based on the indices of the goals.
+
+        Args:
+            batch_size: Batch size.
+            idxs: Indices of the transitions to sample. If None, random indices are sampled.
+            evaluation: Whether to sample for evaluation. If True, image augmentation is not applied.
+        """
+        if idxs is None:
+            idxs = self.dataset.get_random_idxs(batch_size)
+
+        batch = self.dataset.sample(batch_size, idxs)
         if 'actions' in self.dataset:
             prev_idxs = idxs - 1
             is_initial = np.isin(idxs, self.initial_locs)
