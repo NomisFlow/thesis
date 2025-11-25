@@ -50,18 +50,51 @@ class TMDAgent(flax.struct.PyTreeNode):
         alpha_raw = self.network.select('alpha_raw')()
         alpha = jax.nn.sigmoid(alpha_raw)
         reshape = (x.shape[-1] // k, k)
+        
+        # Reshape to (..., Latent//k, k)
         x = jnp.reshape(x, (*x.shape[:-1], *reshape))
         y = jnp.reshape(y, (*y.shape[:-1], *reshape))
+        
         valid = x < y
         D = x.shape[-1]
-        xy = jnp.concatenate(jnp.broadcast_arrays(x, y), axis=-1)
-        ixy = xy.argsort(axis=-1)
-        sxy = jnp.take_along_axis(xy, ixy, axis=-1)
-        neg_inc_copies = jnp.take_along_axis(valid, ixy % D, axis=-1) * jnp.where(ixy < D, -1, 1)
-        neg_inp_copies = jnp.cumsum(neg_inc_copies, axis=-1)
-        neg_f = (neg_inp_copies < 0) * (-1.0)
-        neg_incf = jnp.concatenate([neg_f[..., :1], neg_f[..., 1:] - neg_f[..., :-1]], axis=-1)
-        components = (sxy * neg_incf).sum(-1)
+        
+        # Flatten the batch dimensions to avoid Metal backend issues with 4D+ take_along_axis
+        # Original shape structure: (Batch..., Latent//k, k)
+        # We keep the last dimension (k) and flatten everything else.
+        flat_shape = (-1, D)
+        
+        # Broadcast explicit to ensure correct flattening
+        x_b, y_b = jnp.broadcast_arrays(x, y)
+        
+        # Store original batch shape for reconstruction: (Batch..., Latent//k)
+        batch_shape = x_b.shape[:-1]
+        
+        # Concatenate on last axis -> size 2*k
+        xy = jnp.concatenate([x_b, y_b], axis=-1)
+        
+        # Flatten input for operations
+        xy_flat = xy.reshape(-1, xy.shape[-1]) # (N, 2k)
+        valid_flat = jnp.broadcast_to(valid, x_b.shape).reshape(-1, valid.shape[-1]) # (N, k)
+
+        # Perform IQE logic on flattened arrays
+        ixy_flat = xy_flat.argsort(axis=-1)
+        sxy_flat = jnp.take_along_axis(xy_flat, ixy_flat, axis=-1)
+        
+        mod_idx_flat = ixy_flat % D
+        neg_inc_copies_flat = jnp.take_along_axis(valid_flat, mod_idx_flat, axis=-1) * jnp.where(
+            ixy_flat < D, -1, 1
+        )
+        neg_inp_copies_flat = jnp.cumsum(neg_inc_copies_flat, axis=-1)
+        
+        neg_f_flat = (neg_inp_copies_flat < 0) * (-1.0)
+        neg_incf_flat = jnp.concatenate(
+            [neg_f_flat[..., :1], neg_f_flat[..., 1:] - neg_f_flat[..., :-1]], axis=-1
+        )
+        components_flat = (sxy_flat * neg_incf_flat).sum(axis=-1)
+        
+        # Reshape back to (Batch..., Latent//k)
+        components = components_flat.reshape(batch_shape)
+        
         result = alpha * components.mean(axis=-1) + (1 - alpha) * components.max(axis=-1)
         return result
 
