@@ -121,7 +121,7 @@ class TMDAgent(flax.struct.PyTreeNode):
         divergence = divergence * (1 - dw) + jnp.diagonal(divergence, axis1=1, axis2=2)[..., None] * dw
         backup_loss = jnp.mean(divergence)
 
-        critic_loss = contrastive_loss + action_invariance_loss + self.config['zeta'] * backup_loss
+        critic_loss = contrastive_loss + action_invariance_loss + self.get_zeta(self.network.step) * backup_loss
 
         logits = jnp.mean(logits, axis=0)
         correct = jnp.argmax(logits, axis=1) == jnp.argmax(I, axis=1)
@@ -136,6 +136,7 @@ class TMDAgent(flax.struct.PyTreeNode):
                 'action_invariance_loss': action_invariance_loss,
                 'backup_loss': backup_loss,
                 'critic_loss': critic_loss,
+                'zeta': self.get_zeta(self.network.step),
                 'binary_accuracy': jnp.mean((logits > 0) == I),
                 'categorical_accuracy': jnp.mean(correct),
                 'logits_pos': logits_pos,
@@ -145,6 +146,16 @@ class TMDAgent(flax.struct.PyTreeNode):
                 'biggest_diff_in_dist': jnp.max(dist - dist_next),
             },
         )
+
+    def get_zeta(self, step):
+        if self.config['zeta_schedule_steps'] > 0:
+            # Linear schedule
+            progress = jnp.clip(step / self.config['zeta_schedule_steps'], 0.0, 1.0)
+            # jax.debug.print("Step: {}, Zeta: {}", step, self.config['zeta_start'] + progress * (self.config['zeta_end'] - self.config['zeta_start']))
+            return self.config['zeta_start'] + progress * (self.config['zeta_end'] - self.config['zeta_start'])
+        else:
+            # Fixed zeta (fallback to 'zeta' for backward compatibility if start/end not set, or use start)
+            return self.config.get('zeta', self.config.get('zeta_start', 0.05))
 
     @jax.jit
     def actor_loss(self, batch, grad_params, rng=None):
@@ -360,6 +371,9 @@ def get_config():
             discount=0.99,  # Discount factor.
             alpha=0.1,  # Temperature in AWR or BC coefficient in DDPG+BC.
             zeta=0.05,  # Weight for TMD backup and invariance losses.
+            zeta_start=0.05,  # Starting value for zeta annealing.
+            zeta_end=0.05,  # Ending value for zeta annealing.
+            zeta_schedule_steps=0,  # Number of steps for zeta annealing (0 = fixed zeta).
             t=3.0,  # Clipping threshold for the backup LINEX loss.
             diag_backup=0.5,  # Weighting of backups on diagonal (i.e., for s,g ~ p(s,g)) vs. off-diagonal (i.e., for s,g ~ p(s)p(g)).
             stopgrad_psi_backup=False,  # Whether to stop gradient for psi in the backup loss.
